@@ -1,0 +1,52 @@
+name:                systemd-informer
+version:             0.1.0
+synopsis:            Initial project template from stack
+description:         Please see README.md
+homepage:            https://github.com/githubuser/systemd-informer#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Author name here
+maintainer:          example@example.com
+copyright:           2017 Author name here
+category:            Web
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Informer.Systemd
+                     , Informer.Report
+  build-depends:       base >= 4.7 && < 5
+                     , containers >= 0.5.7.1
+                     , dbus >= 0.10.12
+                     , bimap >= 0.3.2
+                     , time >= 1.6.0.1
+  default-language:    Haskell2010
+
+executable systemd-informer-exe
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , containers >= 0.5.7.1
+                     , dbus >= 0.10.12
+                     , hostname >= 1.0
+                     , process >= 1.4.2.0
+                     , systemd-informer
+                     , unix >= 2.7.2.0
+  default-language:    Haskell2010
+
+test-suite systemd-informer-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , systemd-informer
+                     , QuickCheck >= 2.8.2
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/githubuser/systemd-informer

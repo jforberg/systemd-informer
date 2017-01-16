@@ -4,6 +4,7 @@ module Informer.Report
     ) where
 
 import qualified Data.Map.Strict as Map
+import Data.List
 import Data.Maybe
 import Data.Time
 import Data.Word
@@ -15,7 +16,7 @@ import Informer.Systemd
 data ReportData = ReportData
     { reportFailedUnits :: [Unit]
     , reportHostname :: String
-    , reportKernelTimestamp :: Word64
+    , reportKernelTimestamp :: LocalTime
     , reportJournals :: Map.Map String String
     }
 
@@ -36,8 +37,9 @@ formatHeader reportData = showString $ printf
     (length $ reportFailedUnits reportData)
     (uptimeSince $ reportKernelTimestamp reportData)
 
-formatUnitList reportData = concatShows $ map (formatUnit reportData) units
+formatUnitList reportData = concatShows $ intersperse (showString "\n\n") unitShows
     where units = reportFailedUnits reportData
+          unitShows = map (formatUnit reportData) units
 
 formatUnit reportData unit =
     concatShows [ formatUnitHeader unit
@@ -55,10 +57,7 @@ formatUnitJournal reportData unit = showString . fromJust $ Map.lookup name jour
     where name = unitName unit
           journals = reportJournals reportData
 
-uptimeSince timestamp = formatTime defaultTimeLocale "%F %T" time
-    where time = parseTimeT $ show timestamp
-
-parseTimeT str = parseTimeOrError False defaultTimeLocale "%s" str :: UTCTime
+uptimeSince timestamp = formatTime defaultTimeLocale "%F %T" timestamp
 
 systemState failedUnits | failedUnits == []   = "running"
                         | otherwise           = "degraded"

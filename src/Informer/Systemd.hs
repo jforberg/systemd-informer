@@ -5,6 +5,8 @@ module Informer.Systemd where
 
 import Control.Monad
 import qualified Data.Bimap as Bimap
+import Data.Time
+import qualified Data.Map.Strict as Map
 import Data.List (sort)
 import Data.Int
 import Data.Word
@@ -21,9 +23,6 @@ data Unit = Unit
     , unitSub :: String
     , unitFollowed :: String
     , unitPath :: ObjectPath
-    , unitJobId :: Word32
-    , unitJobType :: String
-    , unitJobPath :: ObjectPath
     }
     deriving (Show)
 
@@ -49,6 +48,7 @@ activeStateBimap = Bimap.fromList
 instance Show ActiveState where
     show = (activeStateBimap Bimap.!)
 
+activeStateFromString :: String -> ActiveState
 activeStateFromString = (activeStateBimap Bimap.!>)
 
 --from systemd: src/basic/unit-name.h
@@ -72,6 +72,7 @@ loadedStateBimap = Bimap.fromList
 instance Show LoadedState where
     show = (loadedStateBimap Bimap.!)
 
+loadedStateFromString :: String -> LoadedState
 loadedStateFromString = (loadedStateBimap Bimap.!>)
 
 data JobInfo = JobInfo
@@ -94,7 +95,7 @@ listUnits client = do
     return $ map unitFromVariant $ arrayItems variant
 
 unitFromVariant variant =
-    let (n, d, l, a, s, f, p, ji, jt, jp) = fromJust . fromVariant $ variant
+    let (n, d, l, a, s, f, p, ji :: Word32, jt :: String, jp :: ObjectPath) = fromJust . fromVariant $ variant
     in Unit { unitName = n
             , unitDescription = d
             , unitLoaded = loadedStateFromString l
@@ -102,16 +103,18 @@ unitFromVariant variant =
             , unitSub = s
             , unitFollowed = f
             , unitPath = p
-            , unitJobId = ji
-            , unitJobType = jt
-            , unitJobPath = jp
             }
 
-kernelTimestamp client = do
+getKernelTimestamp :: Client -> IO LocalTime
+getKernelTimestamp client = do
     reply <- getProperty client systemdObject managerInterface "KernelTimestamp" systemdBus
+
     let Just variant = fromVariant (methodReturnBody reply !! 0) :: Maybe Variant
         Just timestamp = fromVariant variant :: Maybe Word64
-    return $ timestamp `quot` 1000000
+        epochSeconds = timestamp `quot` 1000000
+        zonedtime = parseTimeOrError False defaultTimeLocale "%s" $ show epochSeconds
+
+    return $ zonedTimeToLocalTime zonedtime
 
 registerJobHandler client handler = do
     let matchRule = matchAny { matchInterface = Just managerInterface
@@ -130,16 +133,29 @@ jobInfoFromVariants variants =
             }
     where get n = fromJust . fromVariant $ variants !! n
 
-getUnit :: Client -> String -> IO ()
+getUnit :: Client -> String -> IO Unit
 getUnit client unitName = do
     unitPath <- getUnitPath client unitName
     reply <- getAllProperties client unitPath unitInterface systemdBus
-    print reply
+    let Just variant = fromVariant (methodReturnBody reply !! 0) :: Maybe (Map.Map String Variant)
+    return $ unitFromVariantMap unitPath variant
 
 getUnitPath client unitName = do
     reply <- managerCall client "GetUnit" [toVariant unitName]
     let Just path = fromVariant (methodReturnBody reply !! 0) :: Maybe ObjectPath
     return path
+
+unitFromVariantMap :: ObjectPath -> Map.Map String Variant -> Unit
+unitFromVariantMap path map =
+    Unit { unitName = get "Id"
+         , unitDescription = get "Description"
+         , unitLoaded = loadedStateFromString $ get "LoadState"
+         , unitActive = activeStateFromString $ get "ActiveState"
+         , unitSub = get "SubState"
+         , unitFollowed = get "Following"
+         , unitPath = path
+         }
+    where get k = let Just val = fromVariant $ map Map.! k in val
 
 managerCall :: Client -> MemberName -> [Variant] -> IO MethodReturn
 managerCall client method arguments =

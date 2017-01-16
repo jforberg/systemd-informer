@@ -33,6 +33,8 @@ executable systemd-informer-exe
                      , dbus >= 0.10.12
                      , hostname >= 1.0
                      , process >= 1.4.2.0
+                     , time >= 1.6.0.1
+                     , stm >= 2.4.4.1
                      , systemd-informer
                      , unix >= 2.7.2.0
   default-language:    Haskell2010

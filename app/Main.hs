@@ -11,7 +11,7 @@ import Informer.Util
 main = do
     dbusClient <- DBus.connectSystem
 
-    let config = Config
+    let config = defaultConfig { configVerbose = True }
 
     monitor <- startMonitor dbusClient config
 

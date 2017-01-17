@@ -1,6 +1,7 @@
 module Informer.Monitor
     ( Monitor
     , Config(..)
+    , defaultConfig
     , startMonitor
     , stopMonitor
     )
@@ -25,8 +26,9 @@ import Informer.Util
 data Monitor = Monitor
     { monitorStateVar :: TVar StateTable
     , monitorDBusClient :: DBus.Client
-    , monitorSubscriptions :: TVar [DBus.SignalHandler]
+    , monitorSubscriptionsVar :: TVar [DBus.SignalHandler]
     , monitorKernelTimestamp :: LocalTime
+    , monitorConfig :: Config
     }
 
 data UnitState = UnitState
@@ -38,6 +40,13 @@ data UnitState = UnitState
 type StateTable = Map String UnitState
 
 data Config = Config
+    { configVerbose :: Bool
+    }
+
+defaultConfig :: Config
+defaultConfig = Config
+    { configVerbose = False
+    }
 
 startMonitor :: DBus.Client -> Config -> IO Monitor
 startMonitor dbusClient config = do
@@ -51,14 +60,19 @@ startMonitor dbusClient config = do
     subscriptionsVar <- atomically $ newTVar []
 
     -- Construct monitor context
-    let monitor = Monitor stateVar dbusClient subscriptionsVar kernelTimestamp
+    let monitor = Monitor { monitorStateVar = stateVar
+                          , monitorDBusClient = dbusClient
+                          , monitorSubscriptionsVar = subscriptionsVar
+                          , monitorKernelTimestamp = kernelTimestamp
+                          , monitorConfig = config
+                          }
 
     -- Subscribe to JobRemoved events on the main systemd instance
     jobSubscription <- registerJobHandler dbusClient (handleJobRemoved monitor)
     atomically $ modifyTVar' subscriptionsVar (jobSubscription:)
 
     -- At this point, if some units were already failed we will handle them
-    forkIO $ handleInitialNotification monitor initialUnits
+    handleInitialNotification monitor initialUnits
 
     return monitor
 
@@ -72,7 +86,10 @@ handleInitialNotification monitor units = do
         unitsWithTimestamp = zip failedUnits (repeat kernelTimestamp)
         dbusClient = monitorDBusClient monitor
 
-    when (failedUnits /= []) $ handleUnitsFailed dbusClient unitsWithTimestamp
+    when (failedUnits /= []) $ do
+        when (configVerbose . monitorConfig $ monitor) $ do
+            printerr $ printf "%d units were failed on startup" (length failedUnits)
+        handleUnitsFailed dbusClient unitsWithTimestamp
 
 handleJobRemoved :: Monitor -> JobInfo -> IO ()
 handleJobRemoved monitor jobInfo = do
@@ -100,8 +117,9 @@ handleJobRemoved monitor jobInfo = do
         newlyFailed = currentStateFailed && (not prevStateFailed)
 
     -- Debug info
-    printerr $ printf "%s entered %s state (was %s)\n"
-        name (show $ currentState) (maybe "unknown" show prevState)
+    when (configVerbose . monitorConfig $ monitor) $ do
+        printerr $ printf "%s entered %s state (was %s)"
+            name (show $ currentState) (maybe "unknown" show prevState)
 
     -- Send notification if newly failed
     when newlyFailed $ handleUnitsFailed dbusClient [(unit, lastGoodTimestamp)]

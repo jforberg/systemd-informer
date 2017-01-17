@@ -116,6 +116,7 @@ getKernelTimestamp client = do
 
     return $ zonedTimeToLocalTime zonedtime
 
+registerJobHandler :: Client -> (JobInfo -> IO ()) -> IO SignalHandler
 registerJobHandler client handler = do
     let matchRule = matchAny { matchInterface = Just managerInterface
                              , matchPath = Just systemdObject
@@ -123,7 +124,7 @@ registerJobHandler client handler = do
                              }
         wrappedHandler = handler . jobInfoFromVariants . signalBody
 
-    void $ addMatch client matchRule wrappedHandler
+    addMatch client matchRule wrappedHandler
 
 jobInfoFromVariants variants =
     JobInfo { jobInfoId = get 0

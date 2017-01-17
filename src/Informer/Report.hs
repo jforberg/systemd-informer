@@ -7,7 +7,6 @@ import qualified Data.Map.Strict as Map
 import Data.List
 import Data.Maybe
 import Data.Time
-import Data.Word
 import Text.Printf
 import Text.Show
 
@@ -62,4 +61,4 @@ uptimeSince timestamp = formatTime defaultTimeLocale "%F %T" timestamp
 systemState failedUnits | failedUnits == []   = "running"
                         | otherwise           = "degraded"
 
-concatShows = foldl (.) (showString "")
+concatShows = foldl' (.) (showString "")

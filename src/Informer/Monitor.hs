@@ -19,6 +19,7 @@ import Network.HostName
 import System.Process
 import Text.Printf
 
+import Informer.Notifications
 import Informer.Report
 import Informer.Systemd
 import Informer.Util
@@ -40,12 +41,16 @@ data UnitState = UnitState
 type StateTable = Map String UnitState
 
 data Config = Config
-    { configVerbose :: Bool
+    { configDebug :: Bool
+    , configStdout :: Bool
     }
+
+data NotificationTarget = EmailTarget | StdoutTarget
 
 defaultConfig :: Config
 defaultConfig = Config
-    { configVerbose = False
+    { configDebug = False
+    , configStdout = False
     }
 
 startMonitor :: DBus.Client -> Config -> IO Monitor
@@ -87,9 +92,9 @@ handleInitialNotification monitor units = do
         dbusClient = monitorDBusClient monitor
 
     when (failedUnits /= []) $ do
-        when (configVerbose . monitorConfig $ monitor) $ do
+        when (configDebug . monitorConfig $ monitor) $ do
             printerr $ printf "%d units were failed on startup" (length failedUnits)
-        handleUnitsFailed dbusClient unitsWithTimestamp
+        handleUnitsFailed monitor unitsWithTimestamp
 
 handleJobRemoved :: Monitor -> JobInfo -> IO ()
 handleJobRemoved monitor jobInfo = do
@@ -117,12 +122,12 @@ handleJobRemoved monitor jobInfo = do
         newlyFailed = currentStateFailed && (not prevStateFailed)
 
     -- Debug info
-    when (configVerbose . monitorConfig $ monitor) $ do
+    when (configDebug . monitorConfig $ monitor) $ do
         printerr $ printf "%s entered %s state (was %s)"
             name (show $ currentState) (maybe "unknown" show prevState)
 
     -- Send notification if newly failed
-    when newlyFailed $ handleUnitsFailed dbusClient [(unit, lastGoodTimestamp)]
+    when newlyFailed $ handleUnitsFailed monitor [(unit, lastGoodTimestamp)]
 
 buildInitialState :: [Unit] -> LocalTime -> StateTable
 buildInitialState units currentTime =
@@ -145,8 +150,12 @@ updateState timestamp u table = Map.alter f name table
           currentState = unitActive u
           failed = stateIsFailure currentState
 
-handleUnitsFailed dbusClient unitsWithTimestamps =
-    collectData dbusClient unitsWithTimestamps >>= dispatchNotification
+handleUnitsFailed monitor unitsWithTimestamps = do
+    reportData <- collectData (monitorDBusClient monitor) unitsWithTimestamps
+
+    if configStdout . monitorConfig $ monitor
+        then dispatchNotification reportData StdoutTarget
+        else dispatchNotification reportData EmailTarget
 
 collectData :: DBus.Client -> [(Unit, LocalTime)] -> IO ReportData
 collectData client unitsWithTimestamps = do
@@ -163,8 +172,12 @@ collectData client unitsWithTimestamps = do
 collectJournals :: [(Unit, LocalTime)] -> IO (Map String String)
 collectJournals = foldM addJournalToMap Map.empty
 
-dispatchNotification :: ReportData -> IO ()
-dispatchNotification = printerr . formatReport
+dispatchNotification :: ReportData -> NotificationTarget -> IO ()
+dispatchNotification reportData target = do
+    let report = formatReport reportData
+    case target of
+        EmailTarget -> sendNotification report
+        StdoutTarget -> putStrLn report
 
 addJournalToMap :: Map String String -> (Unit, LocalTime) -> IO (Map String String)
 addJournalToMap map (unit, sinceTimestamp) = do

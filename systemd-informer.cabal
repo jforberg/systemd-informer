@@ -17,6 +17,7 @@ library
   hs-source-dirs:      src
   ghc-options:         -Werror
   exposed-modules:     Informer.Monitor
+                     , Informer.Notifications
                      , Informer.Report
                      , Informer.Systemd
                      , Informer.Util

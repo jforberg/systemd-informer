@@ -3,6 +3,7 @@ module Informer.Report
     , formatReport
     ) where
 
+import Data.Char
 import qualified Data.Map.Strict as Map
 import Data.List
 import Data.Maybe
@@ -21,11 +22,26 @@ data ReportData = ReportData
 
 formatReport :: ReportData -> String
 formatReport reportData =
-    concatShows [ formatHeader reportData
+    concatShows [ formatHeaders reportData
+                , formatSummary reportData
                 , formatUnitList reportData
                 ] ""
 
-formatHeader reportData = showString $ printf
+formatHeaders reportData = showString $ printf
+    "From: %s <root@%s>\n\
+    \Subject: %s degraded: %s failed\n\
+    \\n"
+    (capitalise $ reportHostname reportData) (reportHostname reportData)
+    (reportHostname reportData) (describeUnits $ reportFailedUnits reportData)
+
+    where capitalise "" = ""
+          capitalise (c:cs) = toUpper c : cs
+
+          describeUnits [] = "no units"
+          describeUnits [u] = unitName u
+          describeUnits _ = "several units"
+
+formatSummary reportData = showString $ printf
     "%s\n\
     \    State: %s\n\
     \    Failed units: %d\n\

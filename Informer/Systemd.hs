@@ -1,22 +1,33 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Informer.Systemd where
+module Informer.Systemd
+( Unit(..)
+, UnitName(..)
+, unUnitName
+, ActiveState(..)
+, LoadedState(..)
+, JobInfo(..)
+, listUnits
+, getUnit
+, getKernelTimestamp
+, registerJobHandler
+, removeJobHandler
+)
+where
 
-import Control.Monad
 import qualified Data.Bimap as Bimap
 import Data.Time
 import qualified Data.Map.Strict as Map
-import Data.List (sort)
-import Data.Int
 import Data.Word
 import Data.Maybe
+import Data.Text (Text)
 import DBus
 import DBus.Client
 
 -- from systemd: src/code/dbus-manager.c
 data Unit = Unit
-    { unitName :: String
+    { unitName :: UnitName
     , unitDescription :: String
     , unitLoaded :: LoadedState
     , unitActive :: ActiveState
@@ -24,10 +35,12 @@ data Unit = Unit
     , unitFollowed :: String
     , unitPath :: ObjectPath
     }
-    deriving (Show)
+    deriving (Show, Eq)
 
-instance Eq Unit where
-    u1 == u2 = unitPath u1 == unitPath u2
+newtype UnitName = UnitName String
+    deriving (Show, Eq, Ord)
+
+unUnitName (UnitName un) = un
 
 -- from systemd: src/core/unit.h
 data ActiveState = UnitActive
@@ -37,6 +50,9 @@ data ActiveState = UnitActive
                  | UnitDeactivating
     deriving (Eq, Ord)
 
+instance Show ActiveState where
+    show = (activeStateBimap Bimap.!)
+
 activeStateBimap = Bimap.fromList
     [ (UnitActive, "active")
     , (UnitInactive, "inactive")
@@ -44,9 +60,6 @@ activeStateBimap = Bimap.fromList
     , (UnitActivating, "activating")
     , (UnitDeactivating, "deactivating")
     ]
-
-instance Show ActiveState where
-    show = (activeStateBimap Bimap.!)
 
 activeStateFromString :: String -> ActiveState
 activeStateFromString = (activeStateBimap Bimap.!>)
@@ -78,8 +91,8 @@ loadedStateFromString = (loadedStateBimap Bimap.!>)
 data JobInfo = JobInfo
     { jobInfoId :: Word32
     , jobInfoPath :: ObjectPath
-    , jobInfoUnitName :: String
-    , jobInfoResult :: String
+    , jobInfoUnitName :: UnitName
+    , jobInfoResult :: Text
     }
     deriving (Show)
 
@@ -89,14 +102,14 @@ managerInterface = "org.freedesktop.systemd1.Manager" :: InterfaceName
 unitInterface = "org.freedesktop.systemd1.Unit" :: InterfaceName
 propertiesInterface = "org.freedesktop.DBus.Properties" :: InterfaceName
 
-listUnits client = do
-    reply <- managerCall client "ListUnits" []
-    let Just variant = fromVariant (methodReturnBody reply !! 0) :: Maybe Array
+listUnits c = do
+    reply <- managerCall c "ListUnits" []
+    let Just variant = fromVariant (head $ methodReturnBody reply) :: Maybe Array
     return $ map unitFromVariant $ arrayItems variant
 
 unitFromVariant variant =
-    let (n, d, l, a, s, f, p, ji :: Word32, jt :: String, jp :: ObjectPath) = fromJust . fromVariant $ variant
-    in Unit { unitName = n
+    let (n, d, l, a, s, f, p, _ :: Word32, _ :: String, _ :: ObjectPath) = fromJust . fromVariant $ variant
+    in Unit { unitName = UnitName n
             , unitDescription = d
             , unitLoaded = loadedStateFromString l
             , unitActive = activeStateFromString a
@@ -106,10 +119,10 @@ unitFromVariant variant =
             }
 
 getKernelTimestamp :: Client -> IO LocalTime
-getKernelTimestamp client = do
-    reply <- getProperty client systemdObject managerInterface "KernelTimestamp" systemdBus
+getKernelTimestamp c = do
+    reply <- getProperty c systemdObject managerInterface "KernelTimestamp" systemdBus
 
-    let Just variant = fromVariant (methodReturnBody reply !! 0) :: Maybe Variant
+    let Just variant = fromVariant (head $ methodReturnBody reply) :: Maybe Variant
         Just timestamp = fromVariant variant :: Maybe Word64
         epochSeconds = timestamp `quot` 1000000
         zonedtime = parseTimeOrError False defaultTimeLocale "%s" $ show epochSeconds
@@ -117,38 +130,41 @@ getKernelTimestamp client = do
     return $ zonedTimeToLocalTime zonedtime
 
 registerJobHandler :: Client -> (JobInfo -> IO ()) -> IO SignalHandler
-registerJobHandler client handler = do
+registerJobHandler c handler = do
     let matchRule = matchAny { matchInterface = Just managerInterface
                              , matchPath = Just systemdObject
                              , matchMember = Just "JobRemoved"
                              }
         wrappedHandler = handler . jobInfoFromVariants . signalBody
 
-    addMatch client matchRule wrappedHandler
+    addMatch c matchRule wrappedHandler
+
+removeJobHandler :: Client -> SignalHandler -> IO ()
+removeJobHandler = removeMatch
 
 jobInfoFromVariants variants =
     JobInfo { jobInfoId = get 0
             , jobInfoPath = get 1
-            , jobInfoUnitName = get 2
+            , jobInfoUnitName = UnitName $ get 2
             , jobInfoResult = get 3
             }
     where get n = fromJust . fromVariant $ variants !! n
 
-getUnit :: Client -> String -> IO Unit
-getUnit client unitName = do
-    unitPath <- getUnitPath client unitName
-    reply <- getAllProperties client unitPath unitInterface systemdBus
-    let Just variant = fromVariant (methodReturnBody reply !! 0) :: Maybe (Map.Map String Variant)
-    return $ unitFromVariantMap unitPath variant
+getUnit :: Client -> UnitName -> IO Unit
+getUnit c name = do
+    path <- getUnitPath c name
+    reply <- getAllProperties c path unitInterface systemdBus
+    let Just variant = fromVariant (head $ methodReturnBody reply) :: Maybe (Map.Map String Variant)
+    return $ unitFromVariantMap path variant
 
-getUnitPath client unitName = do
-    reply <- managerCall client "GetUnit" [toVariant unitName]
-    let Just path = fromVariant (methodReturnBody reply !! 0) :: Maybe ObjectPath
+getUnitPath c (UnitName name) = do
+    reply <- managerCall c "GetUnit" [toVariant name]
+    let Just path = fromVariant (head $ methodReturnBody reply) :: Maybe ObjectPath
     return path
 
 unitFromVariantMap :: ObjectPath -> Map.Map String Variant -> Unit
-unitFromVariantMap path map =
-    Unit { unitName = get "Id"
+unitFromVariantMap path m =
+    Unit { unitName = UnitName $ get "Id"
          , unitDescription = get "Description"
          , unitLoaded = loadedStateFromString $ get "LoadState"
          , unitActive = activeStateFromString $ get "ActiveState"
@@ -156,28 +172,25 @@ unitFromVariantMap path map =
          , unitFollowed = get "Following"
          , unitPath = path
          }
-    where get k = let Just val = fromVariant $ map Map.! k in val
+    where get k = let Just val = fromVariant $ m Map.! k in val
 
 managerCall :: Client -> MemberName -> [Variant] -> IO MethodReturn
-managerCall client method arguments =
-    call_ client (methodCall systemdObject managerInterface method)
+managerCall c meth args =
+    call_ c (methodCall systemdObject managerInterface meth)
         { methodCallDestination = Just systemdBus
-        , methodCallBody = arguments
+        , methodCallBody = args
         }
 
-getManagerProperty client property =
-    getProperty client systemdObject managerInterface property systemdBus
-
 getProperty :: Client -> ObjectPath -> InterfaceName -> MemberName -> BusName -> IO MethodReturn
-getProperty client object interface property dest =
-    call_ client (methodCall object propertiesInterface "Get")
+getProperty c object interface property dest =
+    call_ c (methodCall object propertiesInterface "Get")
         { methodCallDestination = Just dest
-        , methodCallBody = [toVariant (interface), toVariant (property)]
+        , methodCallBody = [ toVariant interface, toVariant property ]
         }
 
 getAllProperties :: Client -> ObjectPath -> InterfaceName -> BusName -> IO MethodReturn
-getAllProperties client object interface dest =
-    call_ client (methodCall object propertiesInterface "GetAll")
+getAllProperties c object interface dest =
+    call_ c (methodCall object propertiesInterface "GetAll")
         { methodCallDestination = Just dest
-        , methodCallBody = [toVariant (interface)]
+        , methodCallBody = [ toVariant interface ]
         }

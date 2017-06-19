@@ -16,6 +16,7 @@ module Informer.Systemd
 )
 where
 
+import Control.Exception
 import qualified Data.Bimap as Bimap
 import Data.Time
 import qualified Data.Map.Strict as Map
@@ -40,6 +41,7 @@ data Unit = Unit
 newtype UnitName = UnitName String
     deriving (Show, Eq, Ord)
 
+unUnitName :: UnitName -> String
 unUnitName (UnitName un) = un
 
 -- from systemd: src/core/unit.h
@@ -102,6 +104,7 @@ managerInterface = "org.freedesktop.systemd1.Manager" :: InterfaceName
 unitInterface = "org.freedesktop.systemd1.Unit" :: InterfaceName
 propertiesInterface = "org.freedesktop.DBus.Properties" :: InterfaceName
 
+listUnits :: Client -> IO [Unit]
 listUnits c = do
     reply <- managerCall c "ListUnits" []
     let Just variant = fromVariant (head $ methodReturnBody reply) :: Maybe Array
@@ -152,15 +155,31 @@ jobInfoFromVariants variants =
 
 getUnit :: Client -> UnitName -> IO Unit
 getUnit c name = do
-    path <- getUnitPath c name
-    reply <- getAllProperties c path unitInterface systemdBus
-    let Just variant = fromVariant (head $ methodReturnBody reply) :: Maybe (Map.Map String Variant)
-    return $ unitFromVariantMap path variant
+    res <- getUnitPath c name
+
+    case res of
+        Nothing -> return Unit -- assume unloaded
+            { unitName = name
+            , unitDescription = "<not loaded>"
+            , unitLoaded = UnitNotFound
+            , unitActive = UnitInactive
+            , unitSub = ""
+            , unitFollowed = ""
+            , unitPath = ""
+            }
+        Just path -> do
+            reply <- getAllProperties c path unitInterface systemdBus
+            let Just variant = fromVariant (head $ methodReturnBody reply) :: Maybe (Map.Map String Variant)
+            return $ unitFromVariantMap path variant
 
 getUnitPath c (UnitName name) = do
-    reply <- managerCall c "GetUnit" [toVariant name]
-    let Just path = fromVariant (head $ methodReturnBody reply) :: Maybe ObjectPath
-    return path
+    res :: Either ClientError MethodReturn <- try $ managerCall c "GetUnit" [toVariant name]
+
+    case res of
+        Left _ -> return Nothing
+        Right reply -> do
+            let Just path = fromVariant (head $ methodReturnBody reply) :: Maybe ObjectPath
+            return $ Just path
 
 unitFromVariantMap :: ObjectPath -> Map.Map String Variant -> Unit
 unitFromVariantMap path m =

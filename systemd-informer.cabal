@@ -15,8 +15,9 @@ cabal-version:       >=1.10
 
 library
   ghc-options:         -Wall -Wno-missing-signatures
-  exposed-modules:     Informer.Monitor
-                     , Informer.Notifications
+  exposed-modules:     Informer.Journal
+                     , Informer.Monitor
+                     , Informer.Notification
                      , Informer.Report
                      , Informer.Systemd
                      , Informer.Util

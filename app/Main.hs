@@ -12,7 +12,6 @@ import System.IO
 import System.Posix.Signals
 
 import Informer.Monitor
-import Informer.Util
 
 main :: IO ()
 main = do
@@ -26,8 +25,6 @@ main = do
         installHandler s (CatchInfo (signalHandler mainLoop)) Nothing
 
     monitor <- startMonitor dbusClient args
-
-    printerr "Listening to Systemd..."
 
     -- Block main thread forever or until we catch a signal
     takeMVar mainLoop

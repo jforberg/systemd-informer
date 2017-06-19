@@ -22,7 +22,8 @@ import qualified Data.Text.IO as TIO
 import Data.Time
 import Network.HostName
 
-import Informer.Notifications
+import Informer.Journal
+import Informer.Notification
 import Informer.Report
 import Informer.Systemd
 import Informer.Util
@@ -107,12 +108,13 @@ handleInitialNotification mon units = do
 
 handleJobRemoved :: Monitor -> JobInfo -> IO ()
 handleJobRemoved mon jobInfo = do
-    let dbusClient = monDbusClient mon
+    let dbus = monDbusClient mon
         stateVar = monStateVar mon
         debug = configDebug . monConfig $ mon
+        name = jobInfoUnitName jobInfo
 
     -- Read info for the affected unit
-    unit <- getUnit dbusClient (jobInfoUnitName jobInfo)
+    unit <- getUnit dbus name
     currentTimestamp <- currentTime
 
     -- Update the state table with new information and return Maybe previous state.
@@ -121,8 +123,7 @@ handleJobRemoved mon jobInfo = do
         writeTVar stateVar $ updateState currentTimestamp unit stateTable
         return $ unitName unit `Map.lookup` stateTable
 
-    let name = unitName unit
-        prevState = fmap unitLastState prevUnitState
+    let prevState = fmap unitLastState prevUnitState
         prevStateFailed = maybe False stateIsFailure prevState
         lastGoodTimestamp = case prevUnitState of
             Just state -> currentTimestamp `fromMaybe` unitLastGood state
@@ -174,16 +175,13 @@ collectData :: DBus.Client -> [(Unit, LocalTime)] -> IO ReportData
 collectData client unitsWithTimestamps = do
     hostname <- getHostName
     kernelTimestamp <- getKernelTimestamp client
-    journals <- collectJournals unitsWithTimestamps
+    journals <- journalsForUnits unitsWithTimestamps
 
     return ReportData { rdFailedUnits = map fst unitsWithTimestamps
                       , rdHostname = T.pack hostname
                       , rdKernelTimestamp = kernelTimestamp
                       , rdJournals = journals
                       }
-
-collectJournals :: [(Unit, LocalTime)] -> IO (Map UnitName Text)
-collectJournals = foldM addJournalToMap Map.empty
 
 dispatchNotification :: ReportData -> NotificationTarget -> IO ()
 dispatchNotification reportData target = do
@@ -192,23 +190,7 @@ dispatchNotification reportData target = do
         EmailTarget -> sendNotification report
         StdoutTarget -> TIO.putStrLn report
 
-addJournalToMap :: Map UnitName Text -> (Unit, LocalTime) -> IO (Map UnitName Text)
-addJournalToMap m (unit, sinceTimestamp) = do
-    let name = unitName unit
-    journal <- journalForUnit name sinceTimestamp
-    return $ Map.insert name journal m
-
-journalForUnit :: UnitName -> LocalTime -> IO Text
-journalForUnit (UnitName name) sinceTimestamp = do
-    let args = [ "-u", name, "-S", ts ]
-        ts = timestamp sinceTimestamp
-
-    readStdoutOrDie  "/usr/bin/journalctl" args ""
-
 stateIsFailure = (== UnitFailed)
 
 currentTime :: IO LocalTime
 currentTime = zonedTimeToLocalTime <$> getZonedTime
-
-timestamp :: LocalTime -> String
-timestamp = formatTime defaultTimeLocale "%F %T"

@@ -1,4 +1,4 @@
-module Informer.Notifications
+module Informer.Notification
 ( sendNotification
 )
 where
